@@ -1,30 +1,34 @@
-﻿using System.Diagnostics;
+using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using SmorcIRL.TempMail;
 using System.Text;
 using Newtonsoft.Json.Linq;
-using WindowsInput;
-using WindowsInput.Native;
 using SmorcIRL.TempMail.Models;
 using System.Text.RegularExpressions;
 using System.Text.Json;
-using ABI.Windows.Devices.AllJoyn;
+using LinuxGlobalHotkeys;
 
 class Program
 {
-    
-    static string versionIdentifier = "v1.4.1.1";
-    
+    static string versionIdentifier = "v1.4.2l";
+
+    #region Debug
+
+    #endregion
+
     #region NameGen
 
     static string[] firstWord =
     {
-        "funny", "sad", "lovely"
+        "funny", "sad", "lovely", "sophisticated", "dumb", "numb", "random", "hilarious", "silly", "suicidal",
+        "spanish", "lonely"
     };
 
     static string[] secondWord =
     {
-        "Driver", "Pedestrian", "Biker", "Addict", "Soldier", "JudyHoppsLover69", "Dude"
+        "Driver", "Pedestrian", "Biker", "Addict", "Soldier", "JudyHoppsLover69", "Dude", "Guy", "Cop", "Fighter",
+        "Murderer", "Gamer", "Programmer", "ArchUser"
     };
 
     static int numRange = 200;
@@ -34,18 +38,20 @@ class Program
         Random random = new Random();
 
         string randNum = random.Next(numRange).ToString();
-        string result = await GetRandomAdjectiveNounAsync() + randNum;
+        string name = await GetRandomAdjectiveNounAsync();
 
-        if (String.IsNullOrEmpty(result))
+        if (String.IsNullOrEmpty(name))
         {
-            result = (firstWord[random.Next(firstWord.Length)] + secondWord[random.Next(secondWord.Length)] + randNum);
+            name = (firstWord[random.Next(firstWord.Length)] + secondWord[random.Next(secondWord.Length)]);
         }
+
+        string result = name + randNum;
 
         return result;
     }
 
     private static readonly HttpClient client = new HttpClient();
-    private const string BaseUrl = "https://random-word-form.herokuapp.com/random";
+    private const string BaseUrl = "https://api.msmc.cc/api/dictionary/random";
 
     public static async Task<string> GetRandomAdjectiveNounAsync()
     {
@@ -54,23 +60,32 @@ class Program
             Random rand = new Random();
             string randomLetter = lower[rand.Next(lower.Length)].ToString();
             // Get a random adjective
-            string adjective = await GetRandomWordAsync($"/adjective/{randomLetter}", false);
-
+            string adjective = await GetRandomWordAsync($"/a");
+            adjective = adjective.ToLower();
             // Get a random noun
-            string noun = await GetRandomWordAsync($"/noun/{randomLetter}", true);
+            string noun = await GetRandomWordAsync($"/n");
+            noun = CapitalizeFirstLetter(noun);
 
+            Log($"adj: {adjective}, noun: {noun}");
             // Combine the two words
             return $"{adjective}{noun}";
         }
         catch (Exception ex)
         {
             // Handle any exceptions that occur during the HTTP request
-            Log($"An error occurred: {ex.Message}");
+            Log($"An error occurred on username creation: {ex.Message}");
             return null;
         }
     }
 
-    private static async Task<string> GetRandomWordAsync(string endpoint, bool CapitalLetter)
+    public class WordResponse
+    {
+        public string word { get; set; }
+        public string pos { get; set; }
+        public string[] definitions { get; set; }
+    }
+
+    private static async Task<string> GetRandomWordAsync(string endpoint)
     {
         // Make the GET request to the API
         HttpResponseMessage response = await client.GetAsync(BaseUrl + endpoint);
@@ -81,18 +96,19 @@ class Program
         // Read the response content as a string
         string jsonResponse = await response.Content.ReadAsStringAsync();
 
+
         try
         {
-            // Deserialize the JSON array to a string array
-            string[] words = JsonSerializer.Deserialize<string[]>(jsonResponse);
+            // Deserialize as a single object, not an array
+            WordResponse wordResponse = JsonSerializer.Deserialize<WordResponse>(jsonResponse);
 
-            if (CapitalLetter)
+            string word = wordResponse.word;
+            if (word.Contains(";"))
             {
-                words[0] = CapitalizeFirstLetter(words[0]);
+                word = word.Split(';')[0].Trim();
             }
 
-            // Return the first word (since the API returns an array)
-            return words[0];
+            return word;
         }
         catch (JsonException)
         {
@@ -102,12 +118,14 @@ class Program
         }
     }
 
+
     private static string CapitalizeFirstLetter(string input)
     {
         if (string.IsNullOrEmpty(input))
             return input;
 
         // Capitalize the first letter and concatenate with the rest of the string
+        input = input.ToLower();
         return char.ToUpper(input[0]) + input.Substring(1);
     }
 
@@ -176,7 +194,7 @@ class Program
             return false;
         }
     }
-    
+
 
     static void AnalyzeFactFileIssue()
     {
@@ -323,6 +341,7 @@ class Program
                     return jsonArray[0]["fact"].ToString();
                 }
             }
+
             Log("ERROR: API Fact retrieval failed.");
             return "ERROR";
         }
@@ -337,65 +356,68 @@ class Program
 
     #region Shortcut
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    private static GlobalHotkeyManager _hotkeyManager;
+    private static HotkeyConfig _config;
+    private static string _configFilePath;
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct MSG
+    private static void RegisterAllHotkeysOnStart(string configFilePath = "hotkeys.json")
     {
-        public IntPtr hwnd;
-        public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
-        public uint time;
-        public POINT pt;
+        _configFilePath = configFilePath;
+        _config = HotkeyConfig.LoadFromFile(_configFilePath);
+        RegisterAllHotkeys();
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct POINT
+    private static void RegisterAllHotkeys()
     {
-        public int x;
-        public int y;
+        // Register all hotkeys from the config
+        _hotkeyManager.RegisterShortcut(_config.EmailShortcut, OnHotKeyEmailAddrPressed);
+        _hotkeyManager.RegisterShortcut(_config.PasswordShortcut, OnHotKeyPSWDPressed);
+        _hotkeyManager.RegisterShortcut(_config.UsernameShortcut, OnHotKeyUsernamePressed);
+        _hotkeyManager.RegisterShortcut(_config.VerificationCodeShortcut, OnHotKeyVerificationCodePressed);
+        _hotkeyManager.RegisterShortcut(_config.RegenerateAccountShortcut, OnAccountRegenerate);
+        _hotkeyManager.RegisterShortcut(_config.KillLoopShortcut, OnEmailLoopEliminate);
+        _hotkeyManager.RegisterShortcut(_config.FactShortcut, OnRandomFactPressed);
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+    public void UpdateConfig(HotkeyConfig newConfig)
+    {
+        // Dispose the current hotkey manager to unregister all hotkeys
+        _hotkeyManager.Dispose();
 
-    private const int WM_HOTKEY = 0x0312;
+        // Update the config
+        HotkeyConfig.SaveToFile(newConfig, _configFilePath);
 
-    // Modifier keys
-    private const uint MOD_ALT = 0x0001;
-    private const uint MOD_CONTROL = 0x0002;
-    private const uint MOD_SHIFT = 0x0004;
-    private const uint MOD_WIN = 0x0008;
+        // Create a new hotkey manager and register the new hotkeys
+        var newHotkeyManager = new GlobalHotkeyManager();
+        _hotkeyManager = newHotkeyManager;
+        RegisterAllHotkeys();
+    }
 
-    // Virtual Key Codes
-    private const uint VK_F9 = 0x78; // F9 key
-    private const uint VK_W = 0x57; //w
-    private const uint VK_Q = 0x51; //q
-    private const uint VK_E = 0x45;
-    private const uint VK_S = 0x53;
-    private const uint VK_1 = 0x31;
-    private const uint VK_P = 0x50;
-    private const uint VK_F = 0x46;
+    public void Dispose()
+    {
+        _hotkeyManager?.Dispose();
+    }
 
     #endregion
 
     #region Window Visibility
 
-    [DllImport("kernel32.dll")]
-    static extern IntPtr GetConsoleWindow();
-
-    [DllImport("user32.dll")]
-    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-    const int SW_HIDE = 0;
-    const int SW_SHOW = 5;
-
+// Linux doesn't have the same window handle concept as Windows
+// We'll implement a simpler version for Linux
     static bool minimizeOnStart = false;
+
+    static void HideConsoleWindow()
+    {
+        // On Linux, we can't easily hide the console window from within the app
+        // We could start the app with a flag to run in the background
+        Log("Console hiding not directly supported on Linux");
+    }
+
+    static void ShowConsoleWindow()
+    {
+        // Similarly, we can't easily show the console window if it was started hidden
+        Log("Console showing not directly supported on Linux");
+    }
 
     #endregion
 
@@ -413,7 +435,7 @@ class Program
 
         const string allChars = lower + upper + digits + symbols;
 
-        int passwordLength = _random.Next(8, 17); // Generates a length between 8 and 16
+        int passwordLength = _random.Next(12, 15); // Generates a length between 8 and 16
 
         StringBuilder password = new StringBuilder(passwordLength);
 
@@ -440,12 +462,16 @@ class Program
     public static bool runningMSGThread = false;
     public static bool killAllMSGThreads = false;
 
-    public static int pasteWaitTime = 400;
+    public static int pasteWaitTime = 2000;
     public static int threadAliveTime = 1200000; //20 minutes
     public static int generateNewAccountTime = 600000; // more that 1,5 minutes (10min)
     public static int retryOnFailTime = 1150; // lil more than a sec
 
+    public static bool typeOut = false;
+    public static int typeOutDelayMS = 100;
+
     public static MailClient currentClient;
+    public static string formattedEmailAddress;
     public static string currentPassword;
     public static string currentUsername;
     public static string[] currentVerificationCodes;
@@ -472,56 +498,253 @@ class Program
 
     #region Clipboard Action
 
-    [DllImport("user32.dll")]
-    static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    static extern bool SetForegroundWindow(IntPtr hWnd);
-
+// Cross-platform clipboard handling
     static void BringToFront()
     {
-        // Get the handle of the active window
-        IntPtr hWnd = GetForegroundWindow();
-
-        // Bring the window to the foreground
-        SetForegroundWindow(hWnd);
+        // Linux doesn't have a direct equivalent to SetForegroundWindow
+        // This functionality would need X11 bindings or xdotool
+        // For now, we'll leave this as a placeholder
+        Log("BringToFront is not implemented on Linux");
     }
 
-    static InputSimulator sim = new InputSimulator();
-
-    [STAThread]
     static void PasteText(string text)
     {
-        Thread staThread = new Thread(() =>
+        Thread clipboardThread = new Thread(() =>
         {
             try
             {
-                string previousClipBoard = Clipboard.GetText();
+                // Save previous clipboard content
+                string previousClipBoard = TextCopy.ClipboardService.GetText() ?? "";
+                Log("Saved previous clipboard content");
 
-                Thread.Sleep(pasteWaitTime / 2);
-                Clipboard.SetText(text);
-                Thread.Sleep(pasteWaitTime / 2);
-                //SendKeys.SendWait("^v");
-                sim.Keyboard.ModifiedKeyStroke(VirtualKeyCode.CONTROL, VirtualKeyCode.VK_V);
+                // Set new text to clipboard
+                TextCopy.ClipboardService.SetText(text);
+                Log("Set new text to clipboard");
 
-                Thread.Sleep(pasteWaitTime / 2);
-                if (previousClipBoard != null && previousClipBoard != "")
+                // Use the configured delay from hotkeys.json
+                Thread.Sleep(_config.ClipboardProcessingDelay);
+
+                // Try multiple paste methods for better compatibility
+                bool pasteSuccess = false;
+
+                // Method 1: Try wl-paste for Wayland
+                if (IsWayland())
                 {
-                    if (previousClipBoard == null) previousClipBoard = "Wait a minute Mr.Postman!";
-                    Clipboard.SetText(previousClipBoard);
+                    pasteSuccess = TryWaylandPaste();
+                }
+
+                // Method 2: Try xdotool for X11
+                if (!pasteSuccess && !IsWayland())
+                {
+                    pasteSuccess = TryXdotoolPaste();
+                }
+
+                // Method 3: Fallback to xclip direct paste
+                if (!pasteSuccess)
+                {
+                    pasteSuccess = TryXclipPaste(text);
+                }
+
+                // Use the configured delay again before restoring clipboard
+                Thread.Sleep(_config.ClipboardProcessingDelay);
+
+                // Restore previous clipboard content
+                if (!string.IsNullOrEmpty(previousClipBoard))
+                {
+                    TextCopy.ClipboardService.SetText(previousClipBoard);
+                    Log("Restored previous clipboard content");
+                }
+
+                if (!pasteSuccess)
+                {
+                    Log(
+                        "Warning: All paste methods failed. Text was copied to clipboard but may not have been pasted.");
                 }
             }
             catch (Exception ex)
             {
-                Log($"Pasting Error, maybe dont click that fast, or: {ex.ToString()}");
+                Log($"Pasting Error: {ex}");
             }
         });
 
-        staThread.SetApartmentState(ApartmentState.STA);
-        staThread.Start();
-        staThread.Join();
+        clipboardThread.Start();
+        clipboardThread.Join();
 
         LogPasted(text);
+    }
+
+// Check if running on Wayland
+    static bool IsWayland()
+    {
+        string? waylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
+        bool arg1 = !string.IsNullOrEmpty(waylandDisplay);
+
+        return arg1 || _config.IsWayland;
+    }
+
+// Try pasting using wl-paste on Wayland
+    static bool TryWaylandPaste()
+    {
+        try
+        {
+            // First check if wl-clipboard is installed
+            using (Process checkProcess = new Process())
+            {
+                checkProcess.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "which",
+                    Arguments = "wl-paste",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+                checkProcess.Start();
+                string output = checkProcess.StandardOutput.ReadToEnd();
+                checkProcess.WaitForExit();
+
+                if (string.IsNullOrEmpty(output))
+                {
+                    Log("wl-clipboard not found. Please install it with: sudo apt install wl-clipboard");
+                    return false;
+                }
+            }
+
+            // Use ydotool for Wayland (if installed)
+            using (Process process = new Process())
+            {
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "ydotool",
+                    Arguments = "key ctrl+v",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                process.Start();
+                process.WaitForExit(1000);
+                Log("Used ydotool to paste in Wayland");
+                return process.ExitCode == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"Wayland paste attempt failed: {ex.Message}");
+            return false;
+        }
+    }
+
+// Try pasting using xdotool (X11)
+    static bool TryXdotoolPaste()
+    {
+        try
+        {
+            using (Process process = new Process())
+            {
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "xdotool",
+                    Arguments = "key --clearmodifiers ctrl+v",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                process.Start();
+                process.WaitForExit(1000);
+                Log("Used xdotool to paste in X11");
+                return process.ExitCode == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"X11 paste attempt failed: {ex.Message}");
+            return false;
+        }
+    }
+
+// Try pasting using xclip (works on both X11 and sometimes Wayland with XWayland)
+    static bool TryXclipPaste(string text)
+    {
+        try
+        {
+            // Check if xclip is installed
+            using (Process checkProcess = new Process())
+            {
+                checkProcess.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "which",
+                    Arguments = "xclip",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+                checkProcess.Start();
+                string output = checkProcess.StandardOutput.ReadToEnd();
+                checkProcess.WaitForExit();
+
+                if (string.IsNullOrEmpty(output))
+                {
+                    Log("xclip not found. Please install it with: sudo apt install xclip");
+                    return false;
+                }
+            }
+
+            // Use xclip to set selection and then simulate paste
+            using (Process process = new Process())
+            {
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "bash",
+                    Arguments =
+                        $"-c \"echo -n '{text.Replace("'", "'\\''")}' | xclip -selection clipboard && xdotool key ctrl+v\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                process.Start();
+                process.WaitForExit(1000);
+                Log("Used xclip direct method to paste");
+                return process.ExitCode == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"xclip paste attempt failed: {ex.Message}");
+            return false;
+        }
+    }
+
+// Alternative method that doesn't rely on clipboard or key simulation
+// This uses xdotool to type the text directly
+//
+    static void TypeTextDirectly(string text)
+    {
+        try
+        {
+            // Escape special characters for shell
+            string escapedText = text.Replace("\"", "\\\"").Replace("$", "\\$");
+
+            using (Process process = new Process())
+            {
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "xdotool",
+                    Arguments = $"type \"{escapedText}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                process.Start();
+                process.WaitForExit();
+            }
+
+            LogPasted(text);
+        }
+        catch (Exception ex)
+        {
+            Log($"Direct typing error: {ex}");
+        }
+    }
+
+    static void OutputText(string txt)
+    {
+        if (typeOut) TypeTextDirectly(txt);
+        else PasteText(txt);
     }
 
     #endregion
@@ -563,44 +786,51 @@ class Program
         }
     }
 
-    static void LogMessage(string message)
+    static void LogSourceMessage(string? source)
     {
-        Process loggerProcess = new Process();
-
-        // Get the full path to ConsoleLogger.exe
-        string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        string loggerPath = System.IO.Path.Combine(exeDirectory, "Logger", "ConsoleLogger.exe");
-
-        // Escape newlines for command-line arguments
-        string escapedMessage = message.Replace(Environment.NewLine, "\\n");
-
-        // Quote the message to handle newlines and spaces
-        string quotedMessage = "\"" + escapedMessage.Replace("\"", "\\") + "\"";
-
-        if (!System.IO.File.Exists(loggerPath))
-        {
-            Log("ConsoleLogger.exe does not exist at the specified path.");
-            return;
-        }
-
-        loggerProcess.StartInfo.FileName = loggerPath;
-        loggerProcess.StartInfo.Arguments = quotedMessage;
-        loggerProcess.StartInfo.UseShellExecute = true;
-
         try
         {
-            loggerProcess.Start();
+            if (String.IsNullOrEmpty(source))
+            {
+                Log("Source string is null or empty.");
+                return;
+            }
+
+            string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            string loggerPath = Path.Combine(exeDirectory, "EmailViewer3", "EmailViewerLinux");
+
+            if (!File.Exists(loggerPath))
+            {
+                Log("EmailViewer3/EmailViewerLinux does not exist at the specified path.");
+                return;
+            }
+
+            // Write the source to a temporary file
+            string tempFilePath = Path.GetTempFileName();
+            File.WriteAllText(tempFilePath, source);
+
+            ProcessStartInfo startInfo = new ProcessStartInfo
+            {
+                FileName = loggerPath,
+                Arguments = $"\"{tempFilePath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            Process.Start(startInfo);
+            Log("Logged source to EmailViewerLinux");
         }
         catch (Exception ex)
         {
-            Log($"Error starting process: {ex.Message}");
+            Log("ERROR logging source message: " + ex.Message);
         }
     }
+
 
     public static string ExtractTextFromHtml(string rawHtml)
     {
         if (string.IsNullOrEmpty(rawHtml))
         {
+            Log("No HTML found");
             return string.Empty;
         }
 
@@ -712,17 +942,18 @@ class Program
         string customUsername = await GetCoolUsername();
         string customEmailAddress = $"{customUsername}@{domain}";
         string password = GeneratePassword();
-        
+
         try
         {
             await client.Register(customEmailAddress, password);
         }
         catch (Exception ex)
         {
-            Log($"ERROR creting new account, retrying {ex.Message}");
-
+            Log($"ERROR creating new account: {ex.Message}");
+            Log("Postherr stopped");
             Log($"Bad Disposable Email Address: {customEmailAddress}");
             Log($"Bad Password: {password}");
+            Log("Retry in 5 seconds...");
 
             Thread.Sleep(5000);
             await GenerateMailClient();
@@ -737,6 +968,7 @@ class Program
         currentClient = client;
         currentPassword = password;
         currentUsername = customUsername;
+        formattedEmailAddress = customEmailAddress;
 
         return client;
     }
@@ -745,114 +977,6 @@ class Program
     static async Task SetupTempMailsNShit()
     {
         await GenerateMailClient();
-
-
-        #region Wait for shortcut
-
-        if (RegisterHotKey(IntPtr.Zero, 1, MOD_ALT, VK_Q))
-        {
-            Console.WriteLine("Hotkey Alt + Q registered for address.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + Q.");
-        }
-
-        if (RegisterHotKey(IntPtr.Zero, 2, MOD_ALT, VK_W))
-        {
-            Console.WriteLine("Hotkey Alt + W registered for password.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + W.");
-        }
-
-        if (RegisterHotKey(IntPtr.Zero, 3, MOD_ALT, VK_E))
-        {
-            Console.WriteLine("Hotkey Alt + E registered for Username.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + E.");
-        }
-
-        if (RegisterHotKey(IntPtr.Zero, 4, MOD_ALT, VK_S))
-        {
-            Console.WriteLine("Hotkey Alt + S registered for VeriCode.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + S.");
-        }
-
-        if (RegisterHotKey(IntPtr.Zero, 5, MOD_ALT, VK_1))
-        {
-            Console.WriteLine("Hotkey Alt + 1 registered for Account REgenerate.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + 1.");
-        }
-
-        if (RegisterHotKey(IntPtr.Zero, 6, MOD_ALT, VK_P))
-        {
-            Console.WriteLine("Hotkey Alt + P registered for Email loop elimination.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + P.");
-        }
-        if (RegisterHotKey(IntPtr.Zero, 7, MOD_ALT, VK_F))
-        {
-            Console.WriteLine("Hotkey Alt + P registered for Pasting random fact.");
-        }
-        else
-        {
-            Log("Failed to register hotkey Alt + P.");
-        }
-
-
-        MSG msg;
-        while (GetMessage(out msg, IntPtr.Zero, 0, 0))
-        {
-            if (msg.message == WM_HOTKEY)
-            {
-                //OnHotKeyPressed();
-
-                switch (msg.wParam.ToInt32())
-                {
-                    case 1:
-                        // Alt + Q was pressed
-                        OnHotKeyEmailAddrPressed();
-                        break;
-                    case 2:
-                        // Alt + W was pressed
-                        OnHotKeyPSWDPressed();
-                        break;
-                    case 3:
-                        //Alt + E
-                        OnHotKeyUsernamePressed();
-                        break;
-                    case 4:
-                        //Alt + S
-                        OnHotKeyVerificationCodePressed();
-                        break;
-                    case 5:
-                        OnAccountRegenerate();
-                        break;
-                    case 6:
-                        OnEmailLoopEliminate();
-                        break;
-                    case 7:
-                        OnRandomFactPressed();
-                        break;
-                }
-            }
-        }
-
-        Log("Postherr exit");
-
-        #endregion
     }
 
     static string empty = "EMPTY";
@@ -904,7 +1028,9 @@ class Program
                                       $"============================ {newline}" +
                                       $"{rawBody}: {GetNewlineCompatible(plainText)}";
 
-                LogMessage(messageToLog);
+                //LogMessage(messageToLog);
+                //LogMessage(message.Subject, message.From.Address, "Me", BodyText, source.ToString()!, verificationCode);
+                LogSourceMessage(source.Data);
 
                 await currentClient.MarkMessageAsSeen(message.Id, true);
                 await currentClient.DeleteMessage(message.Id);
@@ -950,16 +1076,13 @@ class Program
         }
     }
 
+    private static ManualResetEventSlim _exitEvent = new ManualResetEventSlim(false);
 
     [STAThread]
     static async Task Main()
     {
         Log($"Postherr {versionIdentifier} started", true);
-        if (minimizeOnStart)
-        {
-            var handle = GetConsoleWindow();
-            ShowWindow(handle, SW_HIDE);
-        }
+
 
         if (!InitializeFacts())
         {
@@ -971,9 +1094,28 @@ class Program
             timedThread.Start();
         }
 
-        await SetupTempMailsNShit();
-        
+        using (var hotkeyManager = new GlobalHotkeyManager())
+        {
+            // Store it in your static field for reference elsewhere if needed
+            _hotkeyManager = hotkeyManager;
+
+            // Register hotkeys
+            RegisterAllHotkeysOnStart();
+
+            // Setup other components
+            await SetupTempMailsNShit();
+
+            // Wait for exit signal - this keeps the main thread alive
+            _exitEvent.Wait();
+        }
+
         Log("Postherr ended");
+    }
+
+    public static void SignalExit()
+    {
+        OnStop();
+        _exitEvent.Set();
     }
 
     #region Cooldown because my code is as unstable as my mental condition
@@ -1007,9 +1149,9 @@ class Program
         //if (!CanExecute()) return;
         //if (currentClient == null) await GenerateMailClient();
 
-        string emailaddress = currentClient.Email;
+        string emailaddress = formattedEmailAddress; //currentClient.Email;
 
-        PasteText(emailaddress);
+        OutputText(emailaddress);
 
         if (runningMSGThread)
         {
@@ -1028,7 +1170,7 @@ class Program
     {
         if (!CanExecute()) return;
 
-        PasteText(currentPassword!);
+        OutputText(currentPassword!);
     }
 
     [STAThread]
@@ -1036,7 +1178,7 @@ class Program
     {
         if (!CanExecute()) return;
 
-        PasteText(currentUsername!);
+        OutputText(currentUsername!);
     }
 
     public static int verificationCodeCounter = 0;
@@ -1051,7 +1193,7 @@ class Program
             verificationCodeCounter = 0;
         }
 
-        PasteText(currentVerificationCodes[verificationCodeCounter]);
+        OutputText(currentVerificationCodes[verificationCodeCounter]);
         verificationCodeCounter++;
     }
 
@@ -1081,20 +1223,50 @@ class Program
         if (!CanExecute()) return;
 
         string fact = await GetRandomContent();
-        PasteText(fact);
+        OutputText(fact);
     }
 
     #endregion
 
-    void OnStop()
+    static void OnStop()
     {
-        Log("Stopping");
-        UnregisterHotKey(IntPtr.Zero, 1);
-        UnregisterHotKey(IntPtr.Zero, 2);
-        UnregisterHotKey(IntPtr.Zero, 3);
-        UnregisterHotKey(IntPtr.Zero, 4);
-        UnregisterHotKey(IntPtr.Zero, 5);
-        UnregisterHotKey(IntPtr.Zero, 6);
-        UnregisterHotKey(IntPtr.Zero, 7);
+        Log("Postherr stopped");
+    }
+}
+
+
+public class HotkeyConfig
+{
+    public int ClipboardProcessingDelay { get; set; } = 300;
+    public bool IsWayland { get; set; } = true;
+    public string EmailShortcut { get; set; } = "Alt+Q";
+    public string PasswordShortcut { get; set; } = "Alt+W";
+    public string UsernameShortcut { get; set; } = "Alt+E";
+    public string VerificationCodeShortcut { get; set; } = "Alt+S";
+    public string RegenerateAccountShortcut { get; set; } = "Alt+1";
+    public string KillLoopShortcut { get; set; } = "Alt+P";
+    public string FactShortcut { get; set; } = "Alt+F";
+
+    public static HotkeyConfig LoadFromFile(string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            var defaultConfig = new HotkeyConfig();
+            SaveToFile(defaultConfig, filePath);
+            return defaultConfig;
+        }
+
+        string json = File.ReadAllText(filePath);
+        return JsonSerializer.Deserialize<HotkeyConfig>(json) ?? new HotkeyConfig();
+    }
+
+    public static void SaveToFile(HotkeyConfig config, string filePath)
+    {
+        var options = new JsonSerializerOptions
+        {
+            WriteIndented = true
+        };
+        string json = JsonSerializer.Serialize(config, options);
+        File.WriteAllText(filePath, json);
     }
 }
